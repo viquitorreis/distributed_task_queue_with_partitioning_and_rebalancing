@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
 
@@ -45,7 +44,8 @@ func createTask() {
 		taskID := fmt.Sprintf("%s-instance-%d", taskName, i) // id unico para a task...
 
 		hash := sha256.Sum256([]byte(taskID))
-		partition := int(binary.BigEndian.Uint64(hash[:])) % 256 // 256 partitions
+		// first hash byte will be 0 - 255 -> 256 possible partitions
+		partition := hash[0]
 
 		queueName := fmt.Sprintf("tasks:%d", partition)
 

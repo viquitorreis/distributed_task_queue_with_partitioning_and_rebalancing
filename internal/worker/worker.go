@@ -17,8 +17,10 @@ import (
 )
 
 type Worker struct {
-	workerID types.WorkerID
-	leaseID  int64
+	workerID   types.WorkerID
+	leaseID    int64
+	updateChan chan struct{}
+	// workerPartitions []uint8
 
 	conn conn.IConn
 	Chr  ring.IHashRing
@@ -37,8 +39,9 @@ type IWorker interface {
 
 func NewWorker(conn conn.IConn, chr ring.IHashRing) IWorker {
 	w := Worker{
-		conn: conn,
-		Chr:  chr,
+		conn:       conn,
+		Chr:        chr,
+		updateChan: make(chan struct{}, 1),
 	}
 	w.CreateWorker()
 	slog.Info("Worker up and running 👽", "id", w.workerID)
@@ -68,6 +71,8 @@ func (w *Worker) CreateWorker() {
 	myPartitions := w.Chr.FetchPartitionsForNode(w.workerID)
 	fmt.Printf("Worker responsavel por %d partitions: %v\n", len(myPartitions), myPartitions)
 
+	// w.workerPartitions = myPartitions
+
 	workers := w.GetWorkers()
 
 	fmt.Println("workers are: ", workers)
@@ -80,25 +85,40 @@ func (w *Worker) RunTask() {
 	// 1. Remove a task da lista
 	// 2. é atomico
 	// 3. bloqueia esperando se a lista esta vazia ao invez de retornar na hora
-	workerPartitions := w.Chr.GetNodePartitions(w.workerID)
-
-	if len(workerPartitions) == 0 {
+	if len(w.Chr.GetNodePartitions(w.workerID)) == 0 {
 		// Não tem partitions, espera um pouco
 		time.Sleep(time.Second)
 		return
 	}
 
-	partitions := make([]string, len(workerPartitions))
-	for i, partitionID := range workerPartitions {
+	partitions := make([]string, len(w.Chr.GetNodePartitions(w.workerID)))
+	for i, partitionID := range w.Chr.GetNodePartitions(w.workerID) {
 		partitions[i] = fmt.Sprintf("tasks:%d", partitionID)
 	}
 
-	res, err := w.conn.GetRedis().BLPop(context.Background(), 0, partitions...).Result()
+	// context with cancel because needs to be canceled when we need to rebalance
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		<-w.updateChan
+		slog.Info("updated chan received value. Rebalanceando e cancelando blpop atual")
+		cancel() // cancela o blpop atual quando houver algo em updatedChan
+	}()
+
+	res, err := w.conn.GetRedis().BLPop(ctx, 0, partitions...).Result()
 	if err != nil {
+		if err == context.Canceled {
+			slog.Info("current blpop canceled. Workers udpated")
+			// context cancelado, no proximo loop na main será recalculado suas partitions e chamar runTask novamente
+			return
+		}
 		fmt.Println("err reading: ", err)
+		return
 	}
 
-	fmt.Println("res: ", res)
+	slog.Info("worker processou partition", "worker", w.workerID, "task", res[1], "partition", res[0])
+	// fmt.Printf("Worker %s processou: %s da partition %s\n", w.workerID, res[1], res[0])
 }
 
 func (w *Worker) CreateLease() {
@@ -206,6 +226,8 @@ func (w *Worker) WatchWorkers() {
 							w.Chr.AddNodes(types.WorkerID(workerID))
 
 							myPartitions := w.Chr.FetchPartitionsForNode(w.workerID)
+
+							w.updateChan <- struct{}{}
 							slog.Warn("worker agora é dono das partitions", "partitions", myPartitions)
 						}
 					case etcd.EventTypeDelete:
@@ -220,6 +242,8 @@ func (w *Worker) WatchWorkers() {
 
 							myPartitions := w.Chr.FetchPartitionsForNode(w.workerID)
 							slog.Warn("worker agora é dono das partitions", "partitions", myPartitions)
+
+							w.updateChan <- struct{}{}
 						}
 					}
 				}

@@ -45,7 +45,7 @@ Aqui temos 3 ideias centrais:
 2. Usar **consistent hashing:** para decidir qual worker é responsável por quais partitions de forma determinística. Ou seja, um roteamento preciso para o sistema.
 3. Usar **etcd**: para os workers se descobrirem e coordenarem quem está vivo no cluster.
 
-Dessa forma, os **workers** podem olhar ao etcd e ver quem está vivo, roda o mesmo algoritmo de consistent hashing e todos chegam na mesma conclusão sobre quem deve processar quais partitions. É um **consenso - consensus protocol**.
+Dessa forma, os **workers** podem olhar ao etcd e ver quem está vivo, roda o mesmo algoritmo de consistent hashing e todos chegam na mesma conclusão sobre quem deve processar quais partitions. É um **consenso**.
 
 ### Implementação
 

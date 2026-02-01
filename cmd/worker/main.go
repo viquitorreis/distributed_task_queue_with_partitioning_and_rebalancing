@@ -35,7 +35,7 @@ func main() {
 			return
 		default:
 			worker.RunTask()
-			time.Sleep(time.Millisecond * 150)
+			time.Sleep(time.Millisecond * 1500)
 		}
 	}
 }

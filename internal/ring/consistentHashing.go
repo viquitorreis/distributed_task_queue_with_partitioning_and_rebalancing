@@ -14,10 +14,9 @@ import (
 type VNode uint32
 
 type HashRing struct {
-	Nodes            map[VNode]types.WorkerID
-	VNodes           []VNode
-	workerPartitions []uint8
-	totalPartitions  int
+	Nodes           map[VNode]types.WorkerID
+	VNodes          []VNode
+	totalPartitions int
 
 	mu sync.RWMutex
 }
@@ -122,16 +121,11 @@ func (h *HashRing) FetchPartitionsForNode(workerID types.WorkerID) []uint8 {
 		}
 	}
 
-	h.workerPartitions = partitions
-
 	return partitions
 }
 
 func (h *HashRing) GetNodePartitions(workerID types.WorkerID) []uint8 {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	return h.workerPartitions
+	return h.FetchPartitionsForNode(workerID)
 }
 
 func (h *HashRing) RemoveNode(workerID types.WorkerID) {
