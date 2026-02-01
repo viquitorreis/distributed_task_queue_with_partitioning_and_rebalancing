@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	github.com/redis/go-redis/v9 v9.17.3
+	github.com/twmb/murmur3 v1.1.8
 	go.etcd.io/etcd/client/v3 v3.6.7
 )
 

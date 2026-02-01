@@ -1,7 +1,6 @@
 .PHONY: build execute setup setup-redis setup-etcd clean
 
 ETCD_VER	:=	v3.6.7
-NODE_ID 	:= 1
 
 setup: setup-redis setup-etcd
 
@@ -43,11 +42,17 @@ setup-etcd:
 			--log-outputs stderr; \
 	fi
 
+build-tasks:
+	@go build -o bin/cliTasks/cliTasks cmd/cliTasks/main.go
+
+create-tasks: build-tasks
+	@./bin/cliTasks/cliTasks
+
 build:
-	@go build -ldflags="-X main.NODE_ID=${NODE_ID}" -o bin/worker .
+	@go build -o bin/worker/worker cmd/worker/main.go
 
 execute: build
-	@cd bin && ./worker
+	@./bin/worker/worker
 
 clean:
 	@docker stop distributedqueue etcd-gcr-${ETCD_VER} 2>/dev/null || true

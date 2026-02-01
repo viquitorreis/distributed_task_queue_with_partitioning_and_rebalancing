@@ -37,6 +37,9 @@ github.com/redis/go-redis/v9/internal/rand
 github.com/redis/go-redis/v9/internal/util
 github.com/redis/go-redis/v9/maintnotifications
 github.com/redis/go-redis/v9/push
+# github.com/twmb/murmur3 v1.1.8
+## explicit; go 1.11
+github.com/twmb/murmur3
 # go.etcd.io/etcd/api/v3 v3.6.7
 ## explicit; go 1.24.0
 go.etcd.io/etcd/api/v3/authpb
