@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
 func main() {
@@ -29,13 +28,5 @@ func main() {
 		fmt.Println("closing program...")
 	}()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			worker.RunTask()
-			time.Sleep(time.Millisecond * 1500)
-		}
-	}
+	<-ctx.Done()
 }
