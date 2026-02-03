@@ -2,11 +2,9 @@
 
 🇺🇸 A self coordinating distributed task processing system using consistent hashing for dynamic partition assignment and etcd for membership coordination of agents / nodes.
 
-## Table of contents
+[🇺🇸 English](#-english) | [🇧🇷 Português](#-português)
 
-[🇺🇸 English](#english) | [🇧🇷 Português](#português)
-
-## 🇺🇸 EN {#english}
+## 🇺🇸 English
 
 ### Overview
 
@@ -210,7 +208,7 @@ Close connections -> Exit
 - **Hashing**: MurmurHash3 (high performance and low collision)
 - **Concurrency**: goroutines, channels, mutex, context, sync primitives
 
-## 🇧🇷 PT-BR {#português}
+## 🇧🇷 Português
 
 ### Visão geral
 
