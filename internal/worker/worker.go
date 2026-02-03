@@ -62,7 +62,7 @@ func NewWorker(conn conn.IConn, chr ring.IHashRing) IWorker {
 
 	go func() {
 		for {
-			time.Sleep(time.Second * 1)
+			// time.Sleep(time.Second * 1)
 			w.RunTask()
 		}
 	}()
@@ -78,22 +78,31 @@ func (w *Worker) CreateWorker() {
 	if err != nil {
 		log.Fatalf("error getting worker hostname: %s", err)
 	}
+
 	timestamp := time.Now().UnixNano()
 	w.workerID = types.WorkerID(fmt.Sprintf("worker-%s-%d-%d", host, timestamp, os.Getpid()))
 
-	fmt.Println("worker id: ", w.workerID)
+	slog.Info("connecting to etcd...")
 
-	fmt.Println("Conectando ao etcd...")
 	w.CreateLease()
-	fmt.Println("Lease criado")
+
+	slog.Info("lease created")
 
 	w.Chr.AddNodes(w.workerID)
-	fmt.Println("Adicionado ao ring")
+
+	slog.Info("worker added to ring", "worker_id", w.workerID)
 
 	myPartitions := w.Chr.FetchPartitionsForNode(w.workerID)
-	fmt.Printf("Worker responsavel por %d partitions: %v\n", len(myPartitions), myPartitions)
 
-	// w.workerPartitions = myPartitions
+	// partsToString := func() string {
+	// 	var partsStr strings.Builder
+	// 	for _, part := range myPartitions {
+	// 		partsStr.WriteString(fmt.Sprintf("%d", part))
+	// 	}
+	// 	return partsStr.String()
+	// }
+
+	slog.Info("worker partitions", "partitions", myPartitions)
 
 	workers := w.GetWorkers()
 
@@ -103,10 +112,6 @@ func (w *Worker) CreateWorker() {
 }
 
 func (w *Worker) RunTask() {
-	// blocking left pop
-	// 1. Remove a task da lista
-	// 2. é atomico
-	// 3. bloqueia esperando se a lista esta vazia ao invez de retornar na hora
 	if len(w.Chr.GetNodePartitions(w.workerID)) == 0 {
 		time.Sleep(time.Second)
 		return
@@ -121,7 +126,7 @@ func (w *Worker) RunTask() {
 	if err != nil {
 		if err == context.Canceled {
 			slog.Info("current blpop canceled. Workers udpated. Recreating context for new partitions...")
-			// context cancelado, no proximo loop na main será recalculado suas partitions e chamar runTask novamente
+			// context canceled, on the next loop on our main func it will be recalculated its new partitions and call runTask again
 			w.mu.Lock()
 			w.ctx, w.cancel = context.WithCancel(context.Background())
 			w.mu.Unlock()
@@ -143,7 +148,7 @@ func (w *Worker) CreateLease() {
 
 	leaseResp, err := l.Grant(ctx, 10)
 	if err != nil {
-		fmt.Println("error issuing lease: ", leaseResp)
+		slog.Warn("error issuing lease", "error", leaseResp)
 		return
 	}
 
@@ -159,12 +164,14 @@ func (w *Worker) CreateLease() {
 			select {
 			case ka, ok := <-keepAliveChan:
 				if !ok {
-					fmt.Println("keep alive channel closed.")
+					slog.Info("keep alive channel closed")
 					return
 				}
-				fmt.Printf("lease renewed succesfully. New TTL: %d\n", ka.TTL)
+
+				slog.Info("lease renewed succesfully", "New TTL", ka.TTL)
+
 			case <-ctx.Done():
-				fmt.Println("context canceled. Stopping monitor")
+				slog.Info("context canceled. Stopping monitor")
 				return
 			}
 		}
@@ -179,16 +186,13 @@ func (w *Worker) CreateLease() {
 	}
 
 	if resp.Count == 0 {
-		resp, err := etcdCli.Put(ctx, workerID, "live", etcd.WithLease(leaseResp.ID))
+		_, err := etcdCli.Put(ctx, workerID, "live", etcd.WithLease(leaseResp.ID))
 		if err != nil {
 			log.Fatalf("error putting etcd worker key: %v", err)
 			return
 		}
 
-		fmt.Println("resp:", resp)
 	}
-
-	fmt.Println("resp:", resp)
 }
 
 func (w *Worker) GetWorkers() []*Worker {
@@ -211,7 +215,7 @@ func (w *Worker) GetWorkers() []*Worker {
 			leaseID:  kv.Lease,
 		})
 
-		fmt.Printf("Worker ID: %s, Lease ID: %d\n", workerID, kv.Lease)
+		slog.Info("GetWorkers", "worker_id", workerID, "leaseID", kv.Lease)
 	}
 
 	return workers
@@ -261,14 +265,35 @@ func (w *Worker) WatchWorkers() {
 					}
 				}
 			case <-ctx.Done():
-				fmt.Println("ctx closed")
+				slog.Debug("ctx closed")
 			}
 		}
 	}()
 }
 
 func (w *Worker) Shutdown() {
+	slog.Info("shutting down worker gracefully...")
+
+	// canceling any processment (stops blpop)
+	w.cancel()
+
+	if w.leaseID != 0 {
+		slog.Info("revoking worker lease...")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, err := w.conn.GetEtcd().Revoke(ctx, etcd.LeaseID(w.leaseID))
+		if err != nil {
+			slog.Warn("failed to revoke lease", "error", err)
+		} else {
+			slog.Info("lease revoked succesfully")
+		}
+	}
+
 	w.mu.Lock()
 	w.conn.Close()
 	w.mu.Unlock()
+
+	slog.Info("worker shudown complete")
 }

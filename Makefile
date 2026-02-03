@@ -2,7 +2,8 @@
 
 ETCD_VER	:=	v3.6.7
 
-setup: setup-redis setup-etcd
+setup:
+	@docker compose up -d
 
 setup-redis:
 	@if [ "$$(docker ps -aq -f name=distributedqueue)" ]; then \
@@ -55,7 +56,8 @@ execute: build
 	@./bin/worker/worker
 
 clean:
-	@docker stop distributedqueue etcd-gcr-${ETCD_VER} 2>/dev/null || true
-	@docker rm distributedqueue etcd-gcr-${ETCD_VER} 2>/dev/null || true
-	@rm -rf /tmp/etcd-data.tmp
+# 	@docker stop distributedqueue etcd-gcr-${ETCD_VER} 2>/dev/null || true
+# 	@docker rm distributedqueue etcd-gcr-${ETCD_VER} 2>/dev/null || true
+# 	@rm -rf /tmp/etcd-data.tmp
+	@docker compose down -v
 	@rm -rf ./bin/*

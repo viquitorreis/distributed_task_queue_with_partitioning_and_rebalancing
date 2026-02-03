@@ -63,8 +63,6 @@ func (h *HashRing) AddNodes(workerID types.WorkerID) {
 	}
 
 	slices.Sort(h.VNodes)
-
-	fmt.Println("h.VNodes:", h.VNodes)
 }
 
 func (h *HashRing) GetNodeForPartition(partitionID uint8) types.WorkerID {

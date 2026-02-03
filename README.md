@@ -1,169 +1,324 @@
 # Distributed Task Queue partitioning and Rebalancing
 
-## 🇺🇸 EN
+🇺🇸 A self coordinating distributed task processing system using consistent hashing for dynamic partition assignment and etcd for membership coordination of agents / nodes.
 
+## Table of contents
 
-## 🇧🇷 PT-BR
+[🇺🇸 English](#english) | [🇧🇷 Português](#português)
 
-## O que é
+## 🇺🇸 EN {#english}
 
-É uma fila de tarefas distribuídas, que automaticamente se particiona e faz rebalanceamento.
+### Overview
+
+A distributed task queue where multiple worker processes self coordinate to process tasks from Redis queues without a central scheduler. Workers dynamically discover each other through etcd and use consistent hashing to deterministically decide partition ownership, enabling automatic rebalancing when workers join or leave the cluster.
+
+### Demo
+
+**TODO**: Add video demonstration
+
+### Archicture
+
+**TODO**: Add architecture diagram
+
+#### Core Components
+
+**Redis (Task Storage - queue)**
+
+- 256 fixed partitions (`tasks:0` ... `tasks:255`)
+- Tasks hashed by ID to determine partition placement
+- Workers use BLPOP for atomic task retrical
+
+**etcd (Membership Coordination)**
+
+- Workers register with 10 second TTL leases
+- Continuous lease renewal with KeepAlive
+- Watch mechanism detects if a member joins or leaves etcd in real time
+- No central coordinator required (furthermore no single point of failure)
+
+**Consistent Hash Ring (partition assignment to workers)**
+
+- 120 virtual nodes for each worker for statistical distribution
+- Deterministic partition ownership calculation
+- Minimal partition movement during rebalancing (~1/N partitions move when cluster size changes)
+- All workers independently will reach the same conclusion about ownership
+
+**Workers (task processors)**
+
+- Self register on startup with a unique ID
+- Calculate owned partitions via consistent hashing
+- Process tasks from owned partitions using redis BLPOP
+- Automatically rebalance when membership changes
+- Graceful shutdown with lease revocation
+
+### Key Features
+
+- **Decentralized Coordination** - no single point of failure (a tradeoff from having a central manager of workers...)
+- **Dynamic Rebalacing** - Automatic partition redistribution on membership changes
+- **At-least-once delivery** - Task guaranteed to be processed even during failures
+- **Partition Isolation** - Each task mapped to exactly one partition
+- **Graceful Shutdown** - Workers revoke leases before stopping
+
+### Why these Choices
+
+**Why Consistent Hashing**
+
+- **Minimal Movement**: consistent hashing allows only ~1 / N reassigned when adding or removing workers
+- **Deterministic**: All workers calculate the same partitions ownership independently
+- **No coordination overhead**: No need to communicate partition assignments
+- Other approaches (random assignment, range-based, static hashing) either lack dynamic redistribution or require centralized coordination
+
+**Why 256 Fixed Partitions?**
+
+- At I used module on the hash of the task_id to assing the partitions, and as a number of power of 2 enables efficient modulo operations. Altought later on I switched to always get the first byte of the hash, which is still 256 possible combinations. I had to switch because the modulo operator was overflowing the integer.
+- It provides a fine grained distribution even with few workers
+- Fixed count simplifies reasoning about system behavior
+- Its large enough to minime any hot spots in partition distribution across workers, and small enough to avoid unnecessary overhead
+
+**Why pull model (BLPOP)**
+
+- Self-Balancing: fast workers can process more tasks
+- No capacity tracking: workers can pull at their own pace
+- Atomic operations: Redis BLPOP guaranteers atomic operations, which means one worker gets each task
+- Blocks efficiently: no busy waiting or polling overhead
+
+**Why 120 Virtual Nodes?**
+
+- Statistical uniformity: it reduces distribution variance to ~10-15%
+- Tested sweet spot: fewer vnodees will lead to uneven distribution, more vnodes = unnecessary overhead
+
+**Why etcd Over Redis for Membership?**
+
+- Etcd is designed for distributed coordination with strong consistency (used by K8s internally)
+- It have a built-in lease mechanism with automatic expiration
+- The watch API is ideal for tracking real time membership updates
+- Raft consensus implemented internally for reliable failure detection
+
+### Technical Challenges Solved
+
+**Race Condition in Rebalancing**
+
+- **Problem**: Multiple goroutines created for each `RunTask()` call competed for rebalance signals, causing goroutine leaks and delayed cancellations
+- **Solution**: Single persistent goroutine listens on `updateChan`, cancels processing context and will recreate context after cancellation
+
+**Context Lifecycle Management**
+
+- **Problem**: Reusing cancelled context caused subsequent BLPOP calls to fail immediately
+- **Solution**: Recreate context after each cancellation with mutex protection for thread safety
+
+**Graceful Shutdown**
+
+- **Problem**: Workers crashed without notifying cluster, leaving partitions unprocessed until lease expiry (10s)
+- **Solution**: Explicit lease revocation on shutdown for immediate partition reassignment
+
+### Quick Start
+
+**Prerequisites**
+- Docker and Docker Compose
+- Go 1.2x.+
+
+**Setup**
+```bash
+# start redis and etcd
+make setup
+
+# build and run worker:
+make execute
+
+# this command create tasks:
+make create-tasks
+```
+
+**Run Multiple Workers**
+```bash
+# terminal 1
+make execute
+
+# terminal 2  
+make execute
+
+# terminal 3
+make execute
+
+```
+
+**Clean Up**
+```bash
+make clean
+```
+
+### How It Works
+
+**1. Task Submission**
+```
+Task with ID -> Hash(ID) -> partition = hash[0] -> Push to redis list tasks:n
+```
+
+**2. Worker Startup**
+```
+Worker starts -> Register in etcd with lease -> Add self to hash ring ->
+Calculate owned partitions -> Start BLPOP on owned partition queues
+```
+
+**3. Task Processing**
+```
+BLPOP blocks on owned partitions -> Task arrives -> Process ->
+Loop back to BLPOP (continuous processing)
+```
+
+**4. Rebalancing**
+```
+etcd watch detects change -> Update hash ring -> Recalculate partitions ->
+Cancel current BLPOP -> Start BLPOP on new partitions
+```
+
+**5. Graceful Shutdown**
+```
+SIGTERM received -> Cancel processing context -> Revoke etcd lease ->
+Close connections -> Exit
+```
+
+### Project Structure
+
+```
+├── cmd/
+│   ├── worker/          # worker main entry point
+│   └── cliTasks/        # cli tool to send tasks
+├── internal/
+│   ├── worker/          # worker logic & coordination
+│   ├── ring/            # consistent hash ring implementation
+│   ├── conn/            # redis & etcd connection management
+│   └── types/           # shared types
+├── docker-compose.yml   # redis & etcd services
+└── Makefile            # build & run commands
+```
+
+### Future Improvements
+
+- [ ] Exponential backoff retry logic
+- [ ] Dead letter queue for failed tasks
+- [ ] Prometheus metrics (tasks processed, partition ownership, rebalance events)
+- [ ] Health check endpoint
+- [ ] Tests for membership changes
+- [ ] Configurable partition count and virtual nodes
+- [ ] A priotity queue for tasks (would be nice to have such)
+
+### Technical Stack
+
+- **Language**: Go 1.21
+- **Coordination**: etcd v3.6.7
+- **Storage**: Redis 7.x
+- **Hashing**: MurmurHash3 (high performance and low collision)
+- **Concurrency**: goroutines, channels, mutex, context, sync primitives
+
+## 🇧🇷 PT-BR {#português}
+
+### Visão geral
+
+Um sistema de processamento de tarefas auto coordenado, usando consistent hashing para atribuição de partições de forma dinâmica e etcd para coordernação de adesão de agents / nodes (workers).
 
 Aqui, vamos ter múltiplas filas no Redis, e vamos ter workers em processos diferentes, se coordenando simultaneamente. Um worker vai pegar uma tarefa da fila, vai processar e depois pegar a próxima.
 
-### <span style="color:rgb(0, 255, 136)">Cenário</span>
+### Demonstração
 
-Imagina que temos um sistema que precisa processar **milhares de tarefas por segundo.** Como:
+**TODO**: Adicionar vídeo de demonstração
 
-- Processar imagens
-- Enviar e-mails
-- Gerar relatórios
+### Arquitetura
 
-Qualquer tarefa que pode demorar algum tempo. Se fizermos isso em apenas um servidores, ele não daria conta, ia entrar em sobrecarga, dependendo do nível de escala. Então, precisamos distribuir esse trabalho entre vários servidores.
+**TODO**: Adicionar diagrama de arquitetura
 
-### <span style="color:rgb(0, 255, 136)">Problemas</span>
+#### Componentes Principais
 
-Mas existem **problemas**:
+**Redis (armazenamento de tarefas - fila)**
 
-- Como coordenar isso?
-- Como garantimos que cada tarefa seja processada exatamente uma vez?
-- Como dividimos o trabalho de forma justa entre os servidores?
-- O que acontece quando um servidor morre ou quando adicionamos servidores novos?
+Redis guarda 256 filas separadas chamadas `tasks:0` até `tasks:255`. Quando uma tarefa chega, fazemos hash do ID dela e usamos o primeiro byte desse hash para descobrir em qual fila ela vai (sempre terá um valor entre 0 e 255). Os workers usam BLPOP, que é uma operação atômica do Redis que pega uma tarefa da fila e bloqueia esperando se a fila estiver vazia.
 
-### Abordagens possíveis
+**etcd (coordenação de membros)**
 
-Podemos resolver esses problemas das seguintes formas:
+Cada worker se registra no etcd com um lease de 10 segundos que fica sendo renovado continuamente através do KeepAlive. O etcd tem um mecanismo de watch que notifica em tempo real quando algum worker entra ou sai. Não existe coordenador central, então não tem ponto único de falha.
 
-1. Ter um Coordenador central, uma entidade centralizada que coordena todos os trabalhos. Porém tem um problema nessa abordagem, essa entidade central é um ponto único de falha e um gargalo ao sistema. Se ele falhar o sistema todo falha e perdemos em **disponibilidade.** (availability - CAP)
-2. A segunda abordagem é ter um sistema onde os próprios workers se coordenam entre si, sem entidade central, se rebalanceando de forma dinâmica e inteligente. Essa é a abordagem desse projeto.
+**Consistent Hash Ring (atribuição de partições aos workers)**
 
-### Ideias Centrais desse projeto
+O hash ring usa 120 nós virtuais para cada worker para melhorar a distribuição estatística das partições. Todos os workers fazem o mesmo cálculo de forma independente e chegam na mesma conclusão sobre quem é dono de quais partições. Quando o tamanho do cluster muda, apenas cerca de 1/N das partições precisam ser movidas para outros workers.
 
-Aqui temos 3 ideias centrais:
+**Workers (processadores de tarefas)**
 
-1. Usar **particionamento:** dividir todas as tarefas possíveis em 256 grupos fixos, chamados **partitions**.
-2. Usar **consistent hashing:** para decidir qual worker é responsável por quais partitions de forma determinística. Ou seja, um roteamento preciso para o sistema.
-3. Usar **etcd**: para os workers se descobrirem e coordenarem quem está vivo no cluster.
+Cada worker se registra na inicialização com um ID único, calcula quais partições ele deve processar usando consistent hashing, e começa a fazer BLPOP nessas partições. Quando a composição do cluster muda, ele automaticamente recalcula suas partições. No shutdown, ele revoga seu lease do etcd antes de parar.
 
-Dessa forma, os **workers** podem olhar ao etcd e ver quem está vivo, roda o mesmo algoritmo de consistent hashing e todos chegam na mesma conclusão sobre quem deve processar quais partitions. É um **consenso**.
+### Funcionalidades Principais
 
-### Implementação
+**Coordenação descentralizada**: não existe ponto único de falha porque não tem gerenciador central de workers
+**Rebalanceamento dinâmico**: quando workers entram ou saem, as partições são redistribuídas automaticamente
+**Entrega ao menos uma vez**: tarefas são garantidas de serem processadas mesmo quando acontecem falhas
+**Isolamento de partições**: cada tarefa vai para exatamente uma partição específica
+**Shutdown gracioso**: workers revogam seus leases antes de parar
 
-#### Consistent Hashing
+### Por Que Essas Escolhas
 
-Para distribuir e redistribuir as tarefas entre os nodes (workers), de forma dinâmica foi escolhido o Consistent Hashing. Existem outras formas para se chegar ao particionamento, porém essa estrutura de dados se mostra otima nesse cenário de redistribuição dinâmica, onde precisamos de sincronização entre os nodes e eles podem parar ou falhar...
+**Por que Consistent Hashing**
 
-##### Fluxo
+- Quantidade mínima de operações: consistent hashing garante que apenas cerca de 1/N das partições sejam reatribuídas quando adicionamos ou removemos workers
+- Determinístico: todos os workers calculam as mesmas atribuições de partições de forma independente
+- Sem overhead de coordenação: não precisa comunicar atribuições de partições entre workers
+- Outras abordagens como random distribution, baseada em ranges, ou static hashing ou não permitem redistribuição dinâmica ou precisam de coordenação centralizada
 
-**Fluxo Criação de Task**
+**Por que 256 partições fixas**
 
-.:. Aqui não temos o consistent hashing, apenas à título de explicar a dinâmica...
+- Inicialmente eu estava usando módulo no hash do task_id para atribuir partições, e como 256 é potência de 2, isso permite operações de módulo eficientes. Depois mudei para sempre pegar o primeiro byte do hash, que ainda dá 256 combinações possíveis. Tive que mudar porque a operação de módulo estava causando overflow no inteiro
+- Fornece distribuição granular mesmo com poucos workers
+- Número fixo simplifica o raciocínio sobre comportamento do sistema
+- É grande o suficiente para minimizar pontos quentes na distribuição de partições entre workers, e pequeno o suficiente para evitar overhead desnecessário
 
-1. Task chega com um ID / nome
-2. É feito um hash a partir do ID / nome da task
-3. Se faz partition = hash % 256 (quantidade de partitions). O valor resultante desse restante será a partition de destino na fila.
-4. Push na fila, com a task na partition correta.
+**Por que modelo pull com BLPOP**
 
-**Descobrindo quais partitions e tasks são do worker**
+- Auto balanceamento: workers rápidos naturalmente processam mais tarefas
+- Sem rastreamento de capacidade: workers pegam tarefas no próprio ritmo
+- Operações atômicas: Redis BLPOP garante operações atômicas, ou seja, apenas um worker pega cada tarefa
+- Bloqueia eficientemente: não tem busy waiting nem overhead de polling
 
-No consistent hashing... Worker side.
+**Por que 120 nós virtuais**
 
-fluxo: vnode -> partition -> tasks
+- Uniformidade estatística: reduz variação de distribuição para cerca de 10 a 15%
+- Ponto ideal: menos nós virtuais leva a distribuição desigual, mais nós virtuais causa muito overhead
 
-**Big O**: O(P log V), onde P = partitions, V = vnodes.
-    Acontece apenas quando mudança de membership ocorrem (bootstrap de worker exclusão de worker), então o overhead é mínimo comparado com o throughput de processamento de tasks.
+**Por que etcd ao invés de Redis para membership**
 
-Para um worker qualquer (e.g. worker-A) saber o que deve ser processado, ele irá:
+- Etcd foi projetado para coordenação distribuída com consistência forte (usado internamente pelo K8s)
+- Tem mecanismo de lease integrado com expiração automática
+- A API de watch é ideal para rastrear atualizações de membership em tempo real
+- Raft Consensus implementado internamente para detectar de falhas
 
-1. Chamar GetPartitionsForNode("worker-A)
-2. GetPartitionsForNode faz 256 iterações (ou quantas partitions tivermos - isso só ocorre quando um novo worker entra ou sai do etcd).
-    Para a partition 0:
-    - Hash "partition:0" -> obtem hash 123456
-    - Busca no ring o **primeiro vnode >= 123456** (primeiro vnode hash >= hash da partition desejada).
-    - Encontra vnode hash 150000 -> esse vnode pertence a "worker-B"
-    - Partition 0 NÃO é do worker-A, é de outro, então vai ignorar
+### Desafios Técnicos Resolvidos
 
-    ...
+**Race condition no rebalanceamento**
 
-    Para partition 42:
-    - Hash "partition:42" -> obtém hash 999999
-    - Busca no ring o primeiro vnode >= 999999
-    - Encontra vnode com hash 1200000 -> esse vnode sim pertence a "worker-A"
+**Problema**: múltiplas goroutines eram criadas a cada chamada de `RunTask()` e competiam pelos sinais de rebalanceamento, causando vazamento de goroutines e cancelamentos atrasados
+**Solução**: uma única goroutine persistente escuta no `updateChan` cancela o contexto de processamento e recria o contexto após cancelamento
 
-    ... itera 256 vezes (por todas partitions)
-3. Retorna: [5, 7, 23, 42, 58, ...] <- todas partitions que pertencem a worker-A
-4. Worker-A faz BLPOP em ["tasks:5", "tasks:7", "tasks:23", "tasks:42", ...]
-5. Tasks que chegarem nessas partitions no Redis (pela fila) são processadas pelo worker-A sempre.
+**Gerenciamento de ciclo de vida do contexto**
 
-##### Trade-offs:
+**Problema**: reusar contexto cancelado fazia as próximas chamadas de BLPOP falharem imediatamente
+**Solução**: recriar contexto após cada cancelamento com proteção de mutex para thread safety
 
-**Random Assingment**
+**Shutdown gracioso**
 
-Nesse formato, os dados seriam distribuidos de forma randômica. Porém, o client não sabe em qual node está o nó, não sendo possível a re-distribuição dinâmica.
+**Problema**: workers crashavam sem notificar o cluster, deixando partições sem processar até o lease expirar (10 segundos)
+**Solução**: revogação explícita do lease no shutdown para reatribuição imediata de partições
 
-**Cache Global Único**
+### Como Começar
 
-Essa estrutura é rápida. Porém tem problemas de escala e fica complexo administrar devido ao cache miss.
+**Pré requisitos**
 
-**Key Range** - intervalo de chaves
+Docker e Docker Compose
 
-O client pode obter facilmente os dados do server, porém a distribução de chaves entre os nodes não é boa, que pode sobrecarregar um node especifico e deixando outros ociosos.
+Go 1.2x ou superior
 
-**Static Hashing**
+**Configuração**
+```bash
 
-Usa um identificador, como IP ou algo do tipo. Os nodes são armazenados em um array e o módulo do hash service compuita o hash e a chave de dados. Problema: se um node quebrar, é complicado para redistribuir as partições entre os nodes que ainda existem. Adicionar novos nodes também é complexo.
+## License
 
-**Consistent Hashing**
+MIT License - feel free to use this project for learning and interviews.
 
-Essa é uma estrutura inteligente, ela tem um hash ring que minimiza o número de chaves para ser remapeado quando o número de nodes mudarem. Basicamente, a estrutura de anel terá cada node posicionado em um local dele, e nossa função hash vai mapear para uma posição do anel. Ao chegar no anel, se Não encontrou o node diretamente, a estrutura é atravessada em sentido horário do anel, até encontrar o node mais pŕoximo. Se um node quebrar, tudo que era de sua responsabilidade passa para o próximo node (que já é a travessia em si).
+## Author
 
-Essa estrutura é bascamente uma **BST - Binary Search Tree**. Dessa forma conseguimos inserção, busca e remoção em **O(log n)**.
-
-##### Algoritmos de Hash
-
-Inicialmente, foram considerados 3 algoritmos para a hash function:
-
-- SHA256
-- Murmur3
-- MD5
-Todos são amplamente utilizados em tecnologia da informação.
-
-**SHA256**
-
-O SHA256 é uma função Hash criptográfica que produz um tamanho fixo de 256 bits (32 bytes) de hash value a partir de um input de tamanho arbitrário. Ele é muito seguro, usado em protocolos de rede e sistemas, SSL/TLS, assinaturas digitais e blockchains.
-
-Alguns usos comuns seriam:
-
-1. Cryptomoedas
-2. Integridade de dados
-3. Assinaturas digitais
-4. Storage de senhas
-
-**Murmur3**
-
-O MurmurHash é uma função hash não criptográfica, foi feita para ser rápido e eficiente, usado prioritariamente para estruturas que dependem de hash tables onde tem uma performance ótima nessas operações. Ele fornece baixa colisão de dados e altíssima distribuição dos valores de hash. Apesar de não ser criptográfico, tem alta performance e eficiência, um dos motivos de ser usado no Apache Cassandra.
-
-1. Hash tables
-2. Processamento de dados
-3. Indexação de banco de dados
-4. Load Balancing
-
-**MD5**
-
-Também uma função hash muito usada, tem um valor de hash de 128 bits que resultam em 32 caracteres. Apesar de ter sido criado para criptografia, se mostrou não ser tão seguro assim. Esse algoritmo, não oferece a melhor performance, e nem uma segurança otima, e por isso foi descartado.
-
-Portanto, o algoritmo escolhido foi o **murmur3**, tendo em vista que neste cenário de sistemas distribuídos, performance se torna crítico.
-
-##### Partitioning
-
-##### Virtual Nodes
-
-Um conceito muito utilizado hoje em dia ao se fazer consistent hashing, é fazer o uso de **virtual nodes** (vnodes). Vnodes permitem que cada node (no nosso caso os workers) seja dono de um grande número de intervalos de particionamentos, distribuidos ao longo do da Hash Ring.
-
-![alt text](./assets/image.png)
-
-referência: https://docs.datastax.com/en/cassandra-oss/3.0/cassandra/architecture/archDataDistributeDistribute.html
-
-Os virtual nodes são distribuídos ao longo do ring, e cada virtual node estará atrelado a um worker.
-
-Quando fazemos o hash de uma partition, vamos sempre buscar o primeiro VNode com o hash >= que o hash daquela partition. Achado o VNode, retornamos qual é seu Worker corretamente.
+Victor Reis - [my website](https://viquitorreis.github.io/)
