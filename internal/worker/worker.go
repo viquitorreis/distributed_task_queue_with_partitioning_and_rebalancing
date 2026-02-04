@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"dtq/internal/conn"
+	"dtq/internal/metrics"
 	"dtq/internal/ring"
 	"dtq/internal/types"
 	"fmt"
@@ -20,8 +21,10 @@ type Worker struct {
 	workerID   types.WorkerID
 	leaseID    int64
 	updateChan chan struct{}
-	conn       conn.IConn
-	Chr        ring.IHashRing
+
+	conn    conn.IConn
+	chr     ring.IHashRing
+	metrics metrics.IMetrics
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -37,7 +40,11 @@ type IWorker interface {
 	Shutdown()
 }
 
-func NewWorker(conn conn.IConn, chr ring.IHashRing) IWorker {
+func NewWorker(
+	conn conn.IConn,
+	chr ring.IHashRing,
+	metrics metrics.IMetrics,
+) IWorker {
 	// context with cancel because needs to be canceled when we need to rebalance
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -45,7 +52,8 @@ func NewWorker(conn conn.IConn, chr ring.IHashRing) IWorker {
 		ctx:        ctx,
 		cancel:     cancel,
 		conn:       conn,
-		Chr:        chr,
+		chr:        chr,
+		metrics:    metrics,
 		updateChan: make(chan struct{}, 1),
 	}
 
@@ -56,6 +64,7 @@ func NewWorker(conn conn.IConn, chr ring.IHashRing) IWorker {
 	go func() {
 		for range w.updateChan {
 			slog.Info("Rebalancing detected, canceling current BLPOP")
+			w.UpdateMetrics()
 			w.cancel()
 		}
 	}()
@@ -68,6 +77,15 @@ func NewWorker(conn conn.IConn, chr ring.IHashRing) IWorker {
 	}()
 
 	return &w
+}
+
+func (w *Worker) UpdateMetrics() {
+	w.mu.Lock()
+	partitions := len(w.chr.GetNodePartitions(w.workerID))
+	w.mu.Unlock()
+
+	w.metrics.SetPartitions(uint64(partitions))
+	w.metrics.IncrRebalancing()
 }
 
 func (w *Worker) CreateWorker() {
@@ -88,37 +106,27 @@ func (w *Worker) CreateWorker() {
 
 	slog.Info("lease created")
 
-	w.Chr.AddNodes(w.workerID)
+	w.chr.AddNodes(w.workerID)
 
 	slog.Info("worker added to ring", "worker_id", w.workerID)
 
-	myPartitions := w.Chr.FetchPartitionsForNode(w.workerID)
+	myPartitions := w.chr.FetchPartitionsForNode(w.workerID)
 
-	// partsToString := func() string {
-	// 	var partsStr strings.Builder
-	// 	for _, part := range myPartitions {
-	// 		partsStr.WriteString(fmt.Sprintf("%d", part))
-	// 	}
-	// 	return partsStr.String()
-	// }
+	w.metrics.SetPartitions(uint64(len(myPartitions)))
 
-	slog.Info("worker partitions", "partitions", myPartitions)
-
-	workers := w.GetWorkers()
-
-	fmt.Println("workers are: ", workers)
+	// workers := w.GetWorkers()
 
 	w.WatchWorkers()
 }
 
 func (w *Worker) RunTask() {
-	if len(w.Chr.GetNodePartitions(w.workerID)) == 0 {
+	if len(w.chr.GetNodePartitions(w.workerID)) == 0 {
 		time.Sleep(time.Second)
 		return
 	}
 
-	partitions := make([]string, len(w.Chr.GetNodePartitions(w.workerID)))
-	for i, partitionID := range w.Chr.GetNodePartitions(w.workerID) {
+	partitions := make([]string, len(w.chr.GetNodePartitions(w.workerID)))
+	for i, partitionID := range w.chr.GetNodePartitions(w.workerID) {
 		partitions[i] = fmt.Sprintf("tasks:%d", partitionID)
 	}
 
@@ -135,6 +143,8 @@ func (w *Worker) RunTask() {
 		fmt.Println("err reading: ", err)
 		return
 	}
+
+	w.metrics.IncrTask()
 
 	slog.Info("worker processed task", "worker", w.workerID, "task", res[1], "partition", res[0])
 }
@@ -240,9 +250,9 @@ func (w *Worker) WatchWorkers() {
 							slog.Info("🟢 Worker joined", "id", workerID, "lease", event.Kv.Lease)
 
 							// ------- recalcular partitions aqui com consistent hashing
-							w.Chr.AddNodes(types.WorkerID(workerID))
+							w.chr.AddNodes(types.WorkerID(workerID))
 
-							myPartitions := w.Chr.FetchPartitionsForNode(w.workerID)
+							myPartitions := w.chr.FetchPartitionsForNode(w.workerID)
 
 							w.updateChan <- struct{}{}
 							slog.Warn("worker agora é dono das partitions", "partitions", myPartitions)
@@ -255,9 +265,9 @@ func (w *Worker) WatchWorkers() {
 							slog.Info("🔴 Worker left", "id", workerID)
 
 							// ------- recalcular partitions aqui com consistent hashing
-							w.Chr.RemoveNode(types.WorkerID(workerID))
+							w.chr.RemoveNode(types.WorkerID(workerID))
 
-							myPartitions := w.Chr.FetchPartitionsForNode(w.workerID)
+							myPartitions := w.chr.FetchPartitionsForNode(w.workerID)
 							slog.Warn("worker agora é dono das partitions", "partitions", myPartitions)
 
 							w.updateChan <- struct{}{}

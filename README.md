@@ -310,9 +310,6 @@ Docker e Docker Compose
 
 Go 1.2x ou superior
 
-**Configuração**
-```bash
-
 ## License
 
 MIT License - feel free to use this project for learning and interviews.
