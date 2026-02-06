@@ -25,5 +25,19 @@ services:
       - etcd-data:/etcd-data
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:latest
+    network_mode: host # share same network as host machine to get metrics from workers (scrape from localhost machine)
+    # ports:
+    #   - "9099:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./tgroups.json:/etc/prometheus/tgroups.json
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.listen-address=:9099'
+    restart: unless-stopped
+
 volumes:
   etcd-data:

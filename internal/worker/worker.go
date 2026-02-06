@@ -18,9 +18,10 @@ import (
 )
 
 type Worker struct {
-	workerID   types.WorkerID
-	leaseID    int64
-	updateChan chan struct{}
+	workerID    types.WorkerID
+	leaseID     int64
+	metricsPort string
+	updateChan  chan struct{}
 
 	conn    conn.IConn
 	chr     ring.IHashRing
@@ -36,6 +37,8 @@ type IWorker interface {
 	CreateWorker()
 	CreateLease()
 	GetWorkers() []*Worker
+	GetWorkerID() types.WorkerID
+	GetMetricsPort() string
 	WatchWorkers()
 	Shutdown()
 }
@@ -58,6 +61,8 @@ func NewWorker(
 	}
 
 	w.CreateWorker()
+	metrics.SetWorkerID(w.workerID)
+
 	slog.Info("Worker up and running 👽", "id", w.workerID)
 
 	// goroutine to detect rebalancing (updated workers on etcd)
@@ -103,6 +108,7 @@ func (w *Worker) CreateWorker() {
 	slog.Info("connecting to etcd...")
 
 	w.CreateLease()
+	w.CreateEtcdPrometheusDiscovery()
 
 	slog.Info("lease created")
 
@@ -147,6 +153,20 @@ func (w *Worker) RunTask() {
 	w.metrics.IncrTask()
 
 	slog.Info("worker processed task", "worker", w.workerID, "task", res[1], "partition", res[0])
+}
+
+func (w *Worker) CreateEtcdPrometheusDiscovery() {
+	etcdCli := w.conn.GetEtcd()
+
+	w.metricsPort = fmt.Sprintf("%d", 11111+(os.Getpid()%1000))
+
+	key := fmt.Sprintf("worker_metrics:%s", w.workerID)
+	endpoint := fmt.Sprintf("localhost:%s", w.metricsPort)
+	_, err := etcdCli.Put(context.Background(), key, endpoint, etcd.WithLease(etcd.LeaseID(w.leaseID)))
+	if err != nil {
+		log.Fatalf("error putting etcd worker key: %v", err)
+		return
+	}
 }
 
 func (w *Worker) CreateLease() {
@@ -231,6 +251,10 @@ func (w *Worker) GetWorkers() []*Worker {
 	return workers
 }
 
+func (w *Worker) GetWorkerID() types.WorkerID {
+	return w.workerID
+}
+
 func (w *Worker) WatchWorkers() {
 	ctx := context.Background()
 
@@ -279,6 +303,12 @@ func (w *Worker) WatchWorkers() {
 			}
 		}
 	}()
+}
+
+func (w *Worker) GetMetricsPort() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.metricsPort
 }
 
 func (w *Worker) Shutdown() {

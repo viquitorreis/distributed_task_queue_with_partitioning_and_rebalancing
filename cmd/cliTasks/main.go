@@ -39,7 +39,7 @@ func createTask() {
 		"cleanup-old-data-5",
 	}
 
-	for i := range 200 {
+	for i := range 2000 {
 		taskName := taskNames[rand.IntN(len(taskNames))]
 		taskID := fmt.Sprintf("%s-instance-%d", taskName, i) // id unico para a task...
 
