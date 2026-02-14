@@ -8,15 +8,54 @@
 
 ### Overview
 
-A distributed task queue where multiple worker processes self coordinate to process tasks from Redis queues without a central scheduler. Workers dynamically discover each other through etcd and use consistent hashing to deterministically decide partition ownership, enabling automatic rebalancing when workers join or leave the cluster.
+A distributed task queue where multiple worker processes are self coordinate to process tasks from Redis queues without a central scheduler.
+
+Workers dynamically discover each other using etcd and use consistent hashing to deterministically decide partition ownership, enabling automatic rebalancing when workers join or leave the cluster.
 
 ### Demo
 
-**TODO**: Add video demonstration
+**TODO**
 
 ### Archicture
 
-**TODO**: Add architecture diagram
+**TODO**
+
+
+### Quick Start
+
+**Prerequisites**
+- Docker and Docker Compose
+- Go 1.2x.+
+
+**Setup**
+```bash
+# start redis and etcd
+make setup
+
+# build and run worker:
+make execute
+
+# this command create tasks:
+make create-tasks
+```
+
+**Run Multiple Workers**
+```bash
+# terminal 1
+make execute
+
+# terminal 2  
+make execute
+
+# terminal 3
+make execute
+
+```
+
+**Clean Up**
+```bash
+make clean
+```
 
 #### Core Components
 
@@ -107,42 +146,6 @@ A distributed task queue where multiple worker processes self coordinate to proc
 
 - **Problem**: Workers crashed without notifying cluster, leaving partitions unprocessed until lease expiry (10s)
 - **Solution**: Explicit lease revocation on shutdown for immediate partition reassignment
-
-### Quick Start
-
-**Prerequisites**
-- Docker and Docker Compose
-- Go 1.2x.+
-
-**Setup**
-```bash
-# start redis and etcd
-make setup
-
-# build and run worker:
-make execute
-
-# this command create tasks:
-make create-tasks
-```
-
-**Run Multiple Workers**
-```bash
-# terminal 1
-make execute
-
-# terminal 2  
-make execute
-
-# terminal 3
-make execute
-
-```
-
-**Clean Up**
-```bash
-make clean
-```
 
 ### How It Works
 

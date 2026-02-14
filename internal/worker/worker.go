@@ -6,9 +6,11 @@ import (
 	"dtq/internal/metrics"
 	"dtq/internal/ring"
 	"dtq/internal/types"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"sync"
@@ -18,10 +20,11 @@ import (
 )
 
 type Worker struct {
-	workerID    types.WorkerID
-	leaseID     int64
-	metricsPort string
-	updateChan  chan struct{}
+	workerID       types.WorkerID
+	leaseID        int64
+	metricsPort    string
+	retryScheduler IRetryBackoff
+	updateChan     chan struct{}
 
 	conn    conn.IConn
 	chr     ring.IHashRing
@@ -33,12 +36,14 @@ type Worker struct {
 }
 
 type IWorker interface {
-	RunTask()
 	CreateWorker()
 	CreateLease()
 	GetWorkers() []*Worker
 	GetWorkerID() types.WorkerID
 	GetMetricsPort() string
+	GetOwnedRetryPartitions() []uint8
+	PopTask() (error, string)
+	RunTask(task ITask) error
 	WatchWorkers()
 	Shutdown()
 }
@@ -62,6 +67,7 @@ func NewWorker(
 
 	w.CreateWorker()
 	metrics.SetWorkerID(w.workerID)
+	w.retryScheduler = NewRetryBackoff(&w)
 
 	slog.Info("Worker up and running 👽", "id", w.workerID)
 
@@ -77,16 +83,18 @@ func NewWorker(
 	go func() {
 		for {
 			// time.Sleep(time.Second * 1)
-			w.RunTask()
+			w.PopTask()
 		}
 	}()
+
+	go w.retryScheduler.ProcessRetries(ctx)
 
 	return &w
 }
 
 func (w *Worker) UpdateMetrics() {
 	w.mu.Lock()
-	partitions := len(w.chr.GetNodePartitions(w.workerID))
+	partitions := len(w.chr.FetchPartitionsForNode(w.workerID))
 	w.mu.Unlock()
 
 	w.metrics.SetPartitions(uint64(partitions))
@@ -120,19 +128,17 @@ func (w *Worker) CreateWorker() {
 
 	w.metrics.SetPartitions(uint64(len(myPartitions)))
 
-	// workers := w.GetWorkers()
-
 	w.WatchWorkers()
 }
 
-func (w *Worker) RunTask() {
-	if len(w.chr.GetNodePartitions(w.workerID)) == 0 {
+func (w *Worker) PopTask() (error, string) {
+	if len(w.chr.FetchPartitionsForNode(w.workerID)) == 0 {
 		time.Sleep(time.Second)
-		return
+		return errors.New("error getting node pattitions"), ""
 	}
 
-	partitions := make([]string, len(w.chr.GetNodePartitions(w.workerID)))
-	for i, partitionID := range w.chr.GetNodePartitions(w.workerID) {
+	partitions := make([]string, len(w.chr.FetchPartitionsForNode(w.workerID)))
+	for i, partitionID := range w.chr.FetchPartitionsForNode(w.workerID) {
 		partitions[i] = fmt.Sprintf("tasks:%d", partitionID)
 	}
 
@@ -144,15 +150,41 @@ func (w *Worker) RunTask() {
 			w.mu.Lock()
 			w.ctx, w.cancel = context.WithCancel(context.Background())
 			w.mu.Unlock()
-			return
+			return errors.New("context canceled while popping"), ""
 		}
-		fmt.Println("err reading: ", err)
-		return
+
+		return fmt.Errorf("err reading from redis: %s", err.Error()), ""
 	}
 
-	w.metrics.IncrTask()
+	slog.Info("worker got task", "worker", w.workerID, "task", res[1], "partition", res[0])
 
-	slog.Info("worker processed task", "worker", w.workerID, "task", res[1], "partition", res[0])
+	task := FreshTask{Payload: res[1]}
+
+	if err := w.RunTask(task); err != nil {
+		return fmt.Errorf("error running task: %v", err), ""
+	}
+
+	return nil, res[1]
+}
+
+func (w *Worker) RunTask(task ITask) error {
+	// simulate task processing -> false when not succeeded
+	processTasks := func() bool {
+		slog.Info("task", "payload", task.ReadTask())
+		return rand.IntN(100) < 50
+	}
+
+	if !processTasks() {
+		errMsg := fmt.Sprintf("Reescheduling failed to process task worker_id=%s task_name=%s", string(w.workerID), task.ReadTask())
+		slog.Error(errMsg)
+		w.retryScheduler.ScheduleRetryTask(task)
+		return errors.New(errMsg)
+	}
+
+	slog.Info("processed task", "worker_id", string(w.workerID), "task_name", task.ReadTask())
+
+	w.metrics.IncrTask()
+	return nil
 }
 
 func (w *Worker) CreateEtcdPrometheusDiscovery() {
@@ -303,6 +335,10 @@ func (w *Worker) WatchWorkers() {
 			}
 		}
 	}()
+}
+
+func (w *Worker) GetOwnedRetryPartitions() []uint8 {
+	return w.chr.FetchRetryPartitionsForNode(w.workerID)
 }
 
 func (w *Worker) GetMetricsPort() string {

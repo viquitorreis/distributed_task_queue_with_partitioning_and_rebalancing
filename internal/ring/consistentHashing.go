@@ -25,7 +25,8 @@ type IHashRing interface {
 	AddNodes(workerID types.WorkerID)
 	GetNodeForPartition(partitionID uint8) types.WorkerID
 	FetchPartitionsForNode(workerID types.WorkerID) []uint8
-	GetNodePartitions(workerID types.WorkerID) []uint8
+	GetNodeForRetryPartition(partitionID uint8) types.WorkerID
+	FetchRetryPartitionsForNode(workerID types.WorkerID) []uint8
 	RemoveNode(workerID types.WorkerID)
 }
 
@@ -122,8 +123,61 @@ func (h *HashRing) FetchPartitionsForNode(workerID types.WorkerID) []uint8 {
 	return partitions
 }
 
-func (h *HashRing) GetNodePartitions(workerID types.WorkerID) []uint8 {
-	return h.FetchPartitionsForNode(workerID)
+func (h *HashRing) GetNodeForRetryPartition(partitionID uint8) types.WorkerID {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if len(h.VNodes) == 0 {
+		return ""
+	}
+
+	partitionKey := fmt.Sprintf("retry_partition:%d", partitionID)
+	partitionHash := VNode(hashFunc(partitionKey))
+
+	// search first hash >= partitionHash
+	idx := sort.Search(len(h.VNodes), func(i int) bool {
+		return h.VNodes[i] >= partitionHash
+	})
+
+	// wraparound circular: não achou nada maior, volta ao inicio
+	if idx >= len(h.VNodes) {
+		idx = 0
+	}
+
+	// worker id do vnode encontrado
+	vnodeHash := h.VNodes[idx]
+	return h.Nodes[vnodeHash]
+}
+
+func (h *HashRing) FetchRetryPartitionsForNode(workerID types.WorkerID) []uint8 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if len(h.VNodes) == 0 {
+		return []uint8{}
+	}
+
+	partitions := make([]uint8, 0)
+
+	for i := 0; i < h.totalPartitions; i++ {
+		partitionKey := fmt.Sprintf("retry_partition:%d", i)
+		partitionHash := VNode(hashFunc(partitionKey))
+
+		idx := sort.Search(len(h.VNodes), func(i int) bool {
+			return h.VNodes[i] >= partitionHash
+		})
+
+		if idx >= len(h.VNodes) {
+			idx = 0
+		}
+
+		owner := h.Nodes[h.VNodes[idx]]
+		if owner == workerID {
+			partitions = append(partitions, uint8(i))
+		}
+	}
+
+	return partitions
 }
 
 func (h *HashRing) RemoveNode(workerID types.WorkerID) {
