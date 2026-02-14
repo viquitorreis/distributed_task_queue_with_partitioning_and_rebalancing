@@ -41,6 +41,7 @@ type IWorker interface {
 	GetWorkers() []*Worker
 	GetWorkerID() types.WorkerID
 	GetMetricsPort() string
+	GetMetrics() metrics.IMetrics
 	GetOwnedRetryPartitions() []uint8
 	PopTask() (error, string)
 	RunTask(task ITask) error
@@ -345,6 +346,10 @@ func (w *Worker) GetMetricsPort() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.metricsPort
+}
+
+func (w *Worker) GetMetrics() metrics.IMetrics {
+	return w.metrics
 }
 
 func (w *Worker) Shutdown() {

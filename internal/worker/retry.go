@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"dtq/internal/conn"
 	"dtq/internal/types"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -14,12 +13,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
-
-type RetryTask struct {
-	Payload       string
-	AttCount      uint8
-	NextRetryTime time.Time
-}
 
 type RetryScheduler struct {
 	Worker     IWorker
@@ -33,11 +26,15 @@ type IRetryBackoff interface {
 }
 
 func NewRetryBackoff(w IWorker) IRetryBackoff {
-	return &RetryScheduler{
+	rs := &RetryScheduler{
 		Worker:     w,
 		Conn:       conn.NewConn(),
 		MaxRetries: 10,
 	}
+
+	go rs.GetTotalRetriedTasks()
+
+	return rs
 }
 
 func (r *RetryScheduler) ScheduleRetryTask(task ITask) {
@@ -60,8 +57,24 @@ func (r *RetryScheduler) ScheduleRetryTask(task ITask) {
 			Score:  float64(rt.NextRetryTime.Unix()),
 			Member: json,
 		})
+
+		r.Worker.GetMetrics().IncrRetried()
 	} else {
 		slog.Warn("sending to DLQ")
+		r.Conn.GetRedis().LPush(
+			context.Background(),
+			"dlq:tasks",
+			task.ReadTask(),
+		)
+
+		r.Worker.GetMetrics().IncrDead()
+
+		// expire dlq after 7 days
+		r.Conn.GetRedis().Expire(
+			context.Background(),
+			"dlq:tasks",
+			7*24*time.Hour,
+		)
 	}
 }
 
@@ -98,23 +111,6 @@ func (r *RetryScheduler) ProcessRetries(ctx context.Context) {
 						)
 
 						r.ScheduleRetryTask(task)
-
-						continue
-					} else {
-						// dlq
-						slog.Warn("sending task to DLQ", "task", task.Payload)
-						r.Conn.GetRedis().LPush(
-							context.Background(),
-							"dlq:tasks",
-							task.Payload,
-						)
-
-						// expire dlq after 7 days
-						r.Conn.GetRedis().Expire(
-							context.Background(),
-							"dlq:tasks",
-							7*24*time.Hour,
-						)
 					}
 				}
 
@@ -128,33 +124,29 @@ func (r *RetryScheduler) ProcessRetries(ctx context.Context) {
 	}
 }
 
-func (r *RetryTask) ToJSON() (string, error) {
-	b, err := json.Marshal(r)
-	if err != nil {
-		slog.Error("error marshalling retry task payload", "err", err)
-		return "", err
-	}
-	return string(b), nil
-}
-
-func RetryFromJSON(s string) (*RetryTask, error) {
-	var rt RetryTask
-	if err := json.Unmarshal([]byte(s), &rt); err != nil {
-		slog.Error("error unmarshalling retry task", "err", err)
-		return nil, err
-	}
-	return &rt, nil
-}
-
 func CalcTaskRetryPartition(task string) byte {
 	hash := sha256.Sum256([]byte(task))
 	return hash[rand.IntN(32)]
 }
 
-func (t RetryTask) ReadTask() string {
-	return t.Payload
-}
+func (r *RetryScheduler) GetTotalRetriedTasks() int64 {
+	var retried int64
 
-func (t RetryTask) AttemptCount() uint8 {
-	return t.AttCount
+	for _, partitions := range r.Worker.GetOwnedRetryPartitions() {
+		res, err := r.Conn.GetRedis().ZCount(
+			context.Background(),
+			fmt.Sprintf("retries:%d", partitions),
+			"0",
+			"+inf",
+		).Result()
+		if err != nil {
+			slog.Warn("error getting retried tasks from redis", "error", err)
+			continue
+		}
+		retried += res
+	}
+
+	r.Worker.GetMetrics().SetTotalRetriedTasks(retried)
+
+	return retried
 }
