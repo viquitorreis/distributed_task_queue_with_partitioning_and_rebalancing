@@ -102,6 +102,19 @@ func (r *RetryScheduler) ProcessRetries(ctx context.Context) {
 						continue
 					} else {
 						// dlq
+						slog.Warn("sending task to DLQ", "task", task.Payload)
+						r.Conn.GetRedis().LPush(
+							context.Background(),
+							"dlq:tasks",
+							task.Payload,
+						)
+
+						// expire dlq after 7 days
+						r.Conn.GetRedis().Expire(
+							context.Background(),
+							"dlq:tasks",
+							7*24*time.Hour,
+						)
 					}
 				}
 
