@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"dtq/internal/conn"
-	"dtq/internal/types"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -17,6 +16,7 @@ import (
 type RetryScheduler struct {
 	Worker     IWorker
 	Conn       conn.IConn
+	BaseDelay  time.Duration
 	MaxRetries uint8
 }
 
@@ -25,11 +25,12 @@ type IRetryBackoff interface {
 	ProcessRetries(ctx context.Context)
 }
 
-func NewRetryBackoff(w IWorker) IRetryBackoff {
+func NewRetryBackoff(w IWorker, maxRetries uint8, baseDelay time.Duration) IRetryBackoff {
 	rs := &RetryScheduler{
 		Worker:     w,
 		Conn:       conn.NewConn(),
-		MaxRetries: 10,
+		BaseDelay:  baseDelay,
+		MaxRetries: maxRetries,
 	}
 
 	go rs.GetTotalRetriedTasks()
@@ -42,7 +43,7 @@ func (r *RetryScheduler) ScheduleRetryTask(task ITask) {
 		rt := &RetryTask{
 			Payload:       task.ReadTask(),
 			AttCount:      task.AttemptCount() + 1,
-			NextRetryTime: time.Now().Add(types.BASE_RETRY_DELAY * time.Duration(1<<task.AttemptCount())), // 2^n
+			NextRetryTime: time.Now().Add(r.BaseDelay * time.Duration(1<<task.AttemptCount())), // 2^n
 		}
 
 		json, err := rt.ToJSON()

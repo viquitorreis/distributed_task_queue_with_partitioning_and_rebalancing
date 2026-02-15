@@ -11,6 +11,10 @@ type ITask interface {
 	AttemptCount() uint8
 }
 
+type ITaskProcessor interface {
+	Process(payload string) error
+}
+
 type FreshTask struct {
 	Payload     string
 	ProcessedAt time.Time

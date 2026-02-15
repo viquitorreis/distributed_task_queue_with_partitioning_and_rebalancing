@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
+	"os"
+	"strconv"
+	"time"
 
 	"crypto/sha256"
 
@@ -11,8 +15,23 @@ import (
 )
 
 func main() {
-	fmt.Println("task manager")
-	createTask()
+	slog.Info("task manager")
+
+	tasks := 2000
+
+	if len(os.Args) > 1 {
+		n, err := strconv.Atoi(os.Args[1])
+		if err != nil {
+			slog.Error("invalid number of tasks, using default 2000", "error", err)
+		} else {
+			tasks = n
+		}
+	}
+
+	fmt.Println("creating tasks: ", tasks)
+	time.Sleep(time.Second * 5)
+
+	CreateTask(tasks)
 }
 
 func getRedis() *redis.Client {
@@ -23,11 +42,10 @@ func getRedis() *redis.Client {
 		Protocol: 2,
 	})
 
-	// ctx := context.Background()
 	return rdb
 }
 
-func createTask() {
+func CreateTask(tasks int) {
 
 	ctx := context.Background()
 
@@ -39,9 +57,9 @@ func createTask() {
 		"cleanup-old-data-5",
 	}
 
-	for i := range 2000 {
+	for i := range tasks {
 		taskName := taskNames[rand.IntN(len(taskNames))]
-		taskID := fmt.Sprintf("%s-instance-%d", taskName, i) // id unico para a task...
+		taskID := fmt.Sprintf("%s-instance-%d", taskName, i)
 
 		hash := sha256.Sum256([]byte(taskID))
 		// first hash byte will be 0 - 255 -> 256 possible partitions

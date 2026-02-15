@@ -19,22 +19,6 @@ import (
 	etcd "go.etcd.io/etcd/client/v3"
 )
 
-type Worker struct {
-	workerID       types.WorkerID
-	leaseID        int64
-	serverPort     string
-	retryScheduler IRetryBackoff
-	updateChan     chan struct{}
-
-	conn    conn.IConn
-	chr     ring.IHashRing
-	metrics metrics.IMetrics
-
-	ctx    context.Context
-	cancel context.CancelFunc
-	mu     sync.Mutex
-}
-
 type IWorker interface {
 	CreateWorker()
 	CreateLease()
@@ -51,12 +35,32 @@ type IWorker interface {
 	Shutdown()
 }
 
+type Worker struct {
+	workerID   types.WorkerID
+	leaseID    int64
+	serverPort string
+	updateChan chan struct{}
+
+	retryScheduler IRetryBackoff
+	processor      ITaskProcessor
+	conn           conn.IConn
+	chr            ring.IHashRing
+	metrics        metrics.IMetrics
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+}
+
+type SimulatedProcessor struct{}
+
 func NewWorker(
 	conn conn.IConn,
 	chr ring.IHashRing,
 	metrics metrics.IMetrics,
+	processor ITaskProcessor,
 ) IWorker {
-	// context with cancel because needs to be canceled when we need to rebalance
+	// context with cancel to cancel the context when we need to rebalance
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := Worker{
@@ -65,14 +69,13 @@ func NewWorker(
 		conn:       conn,
 		chr:        chr,
 		metrics:    metrics,
+		processor:  processor,
 		updateChan: make(chan struct{}, 1),
 	}
 
 	w.CreateWorker()
 	metrics.SetWorkerID(w.workerID)
-	w.retryScheduler = NewRetryBackoff(&w)
-
-	slog.Info("Worker up and running 👽", "id", w.workerID)
+	w.retryScheduler = NewRetryBackoff(&w, types.GetMaxRetries(), types.GetBaseRetryDelay())
 
 	// goroutine to detect rebalancing (updated workers on etcd)
 	go func() {
@@ -85,12 +88,13 @@ func NewWorker(
 
 	go func() {
 		for {
-			// time.Sleep(time.Second * 1)
 			w.PopTask()
 		}
 	}()
 
 	go w.retryScheduler.ProcessRetries(ctx)
+
+	slog.Info("Worker up and running 👽", "id", w.workerID)
 
 	return &w
 }
@@ -170,22 +174,19 @@ func (w *Worker) PopTask() (error, string) {
 	return nil, res[1]
 }
 
+func (p *SimulatedProcessor) Process(payload string) error {
+	if rand.IntN(100) < 15 {
+		return fmt.Errorf("simulated failure for task %s", payload)
+	}
+	slog.Info("processed task", "task", payload)
+	return nil
+}
+
 func (w *Worker) RunTask(task ITask) error {
-	// simulate task processing -> false when not succeeded
-	processTasks := func() bool {
-		slog.Info("task", "payload", task.ReadTask())
-		return rand.IntN(100) < 15
-	}
-
-	if !processTasks() {
-		errMsg := fmt.Sprintf("Reescheduling failed to process task worker_id=%s task_name=%s", string(w.workerID), task.ReadTask())
-		slog.Error(errMsg)
+	if err := w.processor.Process(task.ReadTask()); err != nil {
 		w.retryScheduler.ScheduleRetryTask(task)
-		return errors.New(errMsg)
+		return err
 	}
-
-	slog.Info("processed task", "worker_id", string(w.workerID), "task_name", task.ReadTask())
-
 	w.metrics.IncrTask()
 	return nil
 }
@@ -308,7 +309,7 @@ func (w *Worker) WatchWorkers() {
 							workerID := parts[1]
 							slog.Info("🟢 Worker joined", "id", workerID, "lease", event.Kv.Lease)
 
-							// ------- recalcular partitions aqui com consistent hashing
+							// ------- recalculate partitions
 							w.chr.AddNodes(types.WorkerID(workerID))
 
 							myPartitions := w.chr.FetchPartitionsForNode(w.workerID)
@@ -323,7 +324,7 @@ func (w *Worker) WatchWorkers() {
 							workerID := parts[1]
 							slog.Info("🔴 Worker left", "id", workerID)
 
-							// ------- recalcular partitions aqui com consistent hashing
+							// ------- recalculate partitions
 							w.chr.RemoveNode(types.WorkerID(workerID))
 
 							myPartitions := w.chr.FetchPartitionsForNode(w.workerID)

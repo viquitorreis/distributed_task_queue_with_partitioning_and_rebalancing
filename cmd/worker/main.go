@@ -14,14 +14,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
 func main() {
-	ring := ring.NewConsistentHashRing(256)
+	ring := ring.NewConsistentHashRing()
 	conn := conn.NewConn()
 	metrics := metrics.NewMetrics()
-	worker := worker.NewWorker(conn, ring, metrics)
+	worker := worker.NewWorker(conn, ring, metrics, &worker.SimulatedProcessor{})
 	prom := observability.InitPrometheus()
 	etcdBridge := etcdbridge.NewEtcdBridge(conn.GetEtcd())
 	etcdBridge.LoadInitialWorkers()
@@ -39,9 +38,6 @@ func main() {
 	}()
 
 	port := worker.GetServerPort()
-
-	fmt.Println("port: ", port)
-	time.Sleep(time.Second * 5)
 	srv := server.NewHTTPServer(port)
 	srv.RegisterRoutes("/metrics", observability.MetricsHandler(prom))
 	srv.RegisterRoutes("/health", health.NewHealthChecker(worker).Handler())

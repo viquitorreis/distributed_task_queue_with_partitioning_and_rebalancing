@@ -10,7 +10,6 @@ import (
 	"github.com/twmb/murmur3"
 )
 
-// VNode represents the VNode hash
 type VNode uint32
 
 type HashRing struct {
@@ -30,11 +29,11 @@ type IHashRing interface {
 	RemoveNode(workerID types.WorkerID)
 }
 
-func NewConsistentHashRing(partitions int) IHashRing {
+func NewConsistentHashRing() IHashRing {
 	return &HashRing{
 		Nodes:           map[VNode]types.WorkerID{},
 		VNodes:          make([]VNode, 0),
-		totalPartitions: partitions,
+		totalPartitions: types.GetRingPatitions(),
 	}
 }
 
@@ -46,11 +45,10 @@ func newVNodeKey(workerID types.WorkerID, i int) string {
 	return fmt.Sprintf("%s-node-%d", workerID, i)
 }
 
-// a quantidade de VNodes NÃO GARANTE divisão exata. Eles vão melhorar a distribuição estatística,
-// mas não controlar o número exato
-// Consistent Hashing NÃO garante divisão perfeita, garante:
-//  1. divisão razoavelmente uniforme (10%-20% variação)
-//  2. movimento mínimo quando workers mudam
+// VNode quantity does not guarantee exact division. They will improve statistical distribution, but not control exact number.
+// Consistent Hashing does NOT guarantee perfect division, it guarantees:
+//  1. reasonably uniform division (10%-20% variation)
+//  2. minimal movement when workers change
 func (h *HashRing) AddNodes(workerID types.WorkerID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -82,12 +80,11 @@ func (h *HashRing) GetNodeForPartition(partitionID uint8) types.WorkerID {
 		return h.VNodes[i] >= partitionHash
 	})
 
-	// wraparound circular: não achou nada maior, volta ao inicio
+	// circular wraparound
 	if idx >= len(h.VNodes) {
 		idx = 0
 	}
 
-	// worker id do vnode encontrado
 	vnodeHash := h.VNodes[idx]
 	return h.Nodes[vnodeHash]
 }
@@ -139,12 +136,11 @@ func (h *HashRing) GetNodeForRetryPartition(partitionID uint8) types.WorkerID {
 		return h.VNodes[i] >= partitionHash
 	})
 
-	// wraparound circular: não achou nada maior, volta ao inicio
+	// circular wraparound
 	if idx >= len(h.VNodes) {
 		idx = 0
 	}
 
-	// worker id do vnode encontrado
 	vnodeHash := h.VNodes[idx]
 	return h.Nodes[vnodeHash]
 }

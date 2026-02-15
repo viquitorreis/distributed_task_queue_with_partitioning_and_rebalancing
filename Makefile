@@ -47,7 +47,7 @@ build-tasks:
 	@go build -o bin/cliTasks/cliTasks cmd/cliTasks/main.go
 
 create-tasks: build-tasks
-	@./bin/cliTasks/cliTasks
+	@./bin/cliTasks/cliTasks $(N)
 
 build:
 	@go build -o bin/worker/worker cmd/worker/main.go
@@ -56,8 +56,5 @@ execute: build
 	@./bin/worker/worker
 
 clean:
-# 	@docker stop distributedqueue etcd-gcr-${ETCD_VER} 2>/dev/null || true
-# 	@docker rm distributedqueue etcd-gcr-${ETCD_VER} 2>/dev/null || true
-# 	@rm -rf /tmp/etcd-data.tmp
 	@docker compose down -v
 	@rm -rf ./bin/*
