@@ -22,7 +22,7 @@ import (
 type Worker struct {
 	workerID       types.WorkerID
 	leaseID        int64
-	metricsPort    string
+	serverPort     string
 	retryScheduler IRetryBackoff
 	updateChan     chan struct{}
 
@@ -40,9 +40,11 @@ type IWorker interface {
 	CreateLease()
 	GetWorkers() []*Worker
 	GetWorkerID() types.WorkerID
-	GetMetricsPort() string
+	GetServerPort() string
 	GetMetrics() metrics.IMetrics
+	GetOwnedPartitions() []uint8
 	GetOwnedRetryPartitions() []uint8
+	GetLeaseID() int64
 	PopTask() (error, string)
 	RunTask(task ITask) error
 	WatchWorkers()
@@ -172,7 +174,7 @@ func (w *Worker) RunTask(task ITask) error {
 	// simulate task processing -> false when not succeeded
 	processTasks := func() bool {
 		slog.Info("task", "payload", task.ReadTask())
-		return rand.IntN(100) < 50
+		return rand.IntN(100) < 15
 	}
 
 	if !processTasks() {
@@ -191,10 +193,10 @@ func (w *Worker) RunTask(task ITask) error {
 func (w *Worker) CreateEtcdPrometheusDiscovery() {
 	etcdCli := w.conn.GetEtcd()
 
-	w.metricsPort = fmt.Sprintf("%d", 11111+(os.Getpid()%1000))
+	w.serverPort = fmt.Sprintf("%d", 11111+(os.Getpid()%1000))
 
 	key := fmt.Sprintf("worker_metrics:%s", w.workerID)
-	endpoint := fmt.Sprintf("localhost:%s", w.metricsPort)
+	endpoint := fmt.Sprintf("localhost:%s", w.serverPort)
 	_, err := etcdCli.Put(context.Background(), key, endpoint, etcd.WithLease(etcd.LeaseID(w.leaseID)))
 	if err != nil {
 		log.Fatalf("error putting etcd worker key: %v", err)
@@ -342,14 +344,26 @@ func (w *Worker) GetOwnedRetryPartitions() []uint8 {
 	return w.chr.FetchRetryPartitionsForNode(w.workerID)
 }
 
-func (w *Worker) GetMetricsPort() string {
+func (w *Worker) GetServerPort() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.metricsPort
+	return w.serverPort
 }
 
 func (w *Worker) GetMetrics() metrics.IMetrics {
 	return w.metrics
+}
+
+func (w *Worker) GetOwnedPartitions() []uint8 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.chr.FetchPartitionsForNode(w.workerID)
+}
+
+func (w *Worker) GetLeaseID() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.leaseID
 }
 
 func (w *Worker) Shutdown() {

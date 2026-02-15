@@ -1,10 +1,7 @@
 package observability
 
 import (
-	"fmt"
-	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -53,13 +50,6 @@ func InitPrometheus() *prometheus.Registry {
 	return reg
 }
 
-func StartMetricsServer(reg *prometheus.Registry, port string) {
-	http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-	fmt.Println("port is: ", port)
-	time.Sleep(time.Second * 3)
-	slog.Info("Starting metrics server", "port", port)
-	err := http.ListenAndServe(":"+port, nil)
-	if err != nil {
-		slog.Error("Failed to start metrics server", "error", err, "port", port)
-	}
+func MetricsHandler(reg *prometheus.Registry) http.HandlerFunc {
+	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP
 }

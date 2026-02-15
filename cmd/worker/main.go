@@ -4,14 +4,17 @@ import (
 	"context"
 	etcdbridge "dtq/cmd/etcdBridge"
 	"dtq/internal/conn"
+	"dtq/internal/health"
 	"dtq/internal/metrics"
 	"dtq/internal/observability"
 	"dtq/internal/ring"
+	"dtq/internal/server"
 	"dtq/internal/worker"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -35,10 +38,14 @@ func main() {
 		fmt.Println("closing program...")
 	}()
 
-	go func() {
-		port := worker.GetMetricsPort()
-		observability.StartMetricsServer(prom, port)
-	}()
+	port := worker.GetServerPort()
+
+	fmt.Println("port: ", port)
+	time.Sleep(time.Second * 5)
+	srv := server.NewHTTPServer(port)
+	srv.RegisterRoutes("/metrics", observability.MetricsHandler(prom))
+	srv.RegisterRoutes("/health", health.NewHealthChecker(worker).Handler())
+	go srv.Start()
 
 	<-ctx.Done()
 }
