@@ -97,6 +97,9 @@ func (r *RetryScheduler) ProcessRetries(ctx context.Context) {
 				},
 			).Result()
 			if err != nil {
+				if err == context.Canceled {
+					return
+				}
 				slog.Error("error getting retry tasks from redis", "error", err)
 			}
 

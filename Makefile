@@ -52,7 +52,7 @@ create-tasks: build-tasks
 build:
 	@go build -o bin/worker/worker cmd/worker/main.go
 
-execute: build
+execute: build setup
 	@./bin/worker/worker
 
 clean:

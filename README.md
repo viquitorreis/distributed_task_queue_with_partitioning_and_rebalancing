@@ -14,12 +14,13 @@ Workers dynamically discover each other using etcd and use consistent hashing to
 
 ### Demo
 
-**TODO**
+[![Distributed Task Queue Demo](https://img.youtube.com/vi/yE81nPSdjPA/0.jpg)](https://www.youtube.com/watch?v=yE81nPSdjPA)
+
+> Demo shows: worker rebalancing when a node joins and leaves the cluster, exponential backoff retry flow, by the end prometheus with all workers and the metrics.
 
 ### Archicture
 
-**TODO**
-
+![alt text](/assets/architecture.png)
 
 ### Quick Start
 
@@ -27,17 +28,23 @@ Workers dynamically discover each other using etcd and use consistent hashing to
 - Docker and Docker Compose
 - Go 1.2x.+
 
+**Environment Variables (optional)**
+
+| Variable | Default | Description |
+|---|---|---|
+| MAX_RETRIES | 10 | Max retry attempts before DLQ |
+| BASE_RETRY_DELAY | 10 | Base delay in seconds for exponential backoff |
+| NUM_PARTITIONS | 256 | Number of partitions |
+
 **Setup**
 ```bash
-# start redis and etcd
-make setup
-
-# build and run worker:
 make execute
 
 # this command create tasks:
 make create-tasks
 ```
+
+⚠️ For testing purposes, around 15% of the tasks will fail to test the Retry Queue.
 
 **Run Multiple Workers**
 ```bash
@@ -49,7 +56,6 @@ make execute
 
 # terminal 3
 make execute
-
 ```
 
 **Clean Up**
@@ -57,7 +63,37 @@ make execute
 make clean
 ```
 
-#### Core Components
+### Running Tests
+
+```bash
+# requires docker compose running
+make setup
+
+# run all tests
+go test ./...
+```
+
+Integration tests cover:
+
+- Worker rebalancing (start 2 workers, kill 1, verify the survivor assumes all 256 partitions)
+- The full retry flow (task fails -> retry partitions -> DLQ after max retries).
+
+Unit tests cover consistent hash ring invariants:
+
+- Completeness (sum of owned partitions always equals 256)
+- Minimal movement (when a worker joins, only partitions move to the new worker, never between existing ones).
+
+**Accessing Services**
+
+| Service | URL |
+|---|---|
+| Prometheus | http://localhost:9099 |
+| Worker Health Check | http://localhost:{PORT}/health |
+| Worker Metrics | http://localhost:{PORT}/metrics |
+
+> Worker port is dynamically assigned as `11111 + (PID % 1000)`. Check the worker logs on startup for the exact port.
+
+### Core Components
 
 **Redis (Task Storage - queue)**
 
@@ -94,6 +130,10 @@ make clean
 - **At-least-once delivery** - Task guaranteed to be processed even during failures
 - **Partition Isolation** - Each task mapped to exactly one partition
 - **Graceful Shutdown** - Workers revoke leases before stopping
+- **Exponential Backoff Retry** - Failed tasks are rescheduled to independent retry partitions using **separate retry topology** consistent hashing, ensuring retry load is distributed across workers independently from primary partitions
+- **Dead Letter Queue** - Tasks exceeding max retries are moved to a DLQ in Redis with a 7-day TTL for later analysis
+- **Health Check Endpoint** - `GET /health` returns worker ID, owned partitions,  lease ID and uptime as JSON
+- **Prometheus Observability** - Metrics for tasks processed, failed, retried, dead, partition ownership, rebalance events and retry queue depth
 
 ### Why these Choices
 
@@ -185,23 +225,21 @@ Close connections -> Exit
 │   ├── worker/          # worker main entry point
 │   └── cliTasks/        # cli tool to send tasks
 ├── internal/
-│   ├── worker/          # worker logic & coordination
+│   ├── worker/          # worker logic, retry scheduler & coordination
 │   ├── ring/            # consistent hash ring implementation
 │   ├── conn/            # redis & etcd connection management
-│   └── types/           # shared types
-├── docker-compose.yml   # redis & etcd services
-└── Makefile            # build & run commands
+│   ├── health/          # health check handler
+│   ├── server/          # http server & route registration
+│   ├── metrics/         # business metrics aggregation
+│   ├── observability/   # prometheus instrumentation
+│   └── types/           # shared types & env var config
+├── docker-compose.yml   # redis, etcd & prometheus services
+└── Makefile             # build & run commands
 ```
 
 ### Future Improvements
-
-- [ ] Exponential backoff retry logic
-- [ ] Dead letter queue for failed tasks
-- [ ] Prometheus metrics (tasks processed, partition ownership, rebalance events)
-- [ ] Health check endpoint
-- [ ] Tests for membership changes
-- [ ] Configurable partition count and virtual nodes
-- [ ] A priotity queue for tasks (would be nice to have such)
+- [ ] Priority queue for tasks
+- [ ] p50/p99 latency metrics
 
 ### Technical Stack
 
@@ -247,11 +285,15 @@ Cada worker se registra na inicialização com um ID único, calcula quais parti
 
 ### Funcionalidades Principais
 
-**Coordenação descentralizada**: não existe ponto único de falha porque não tem gerenciador central de workers
-**Rebalanceamento dinâmico**: quando workers entram ou saem, as partições são redistribuídas automaticamente
-**Entrega ao menos uma vez**: tarefas são garantidas de serem processadas mesmo quando acontecem falhas
-**Isolamento de partições**: cada tarefa vai para exatamente uma partição específica
-**Shutdown gracioso**: workers revogam seus leases antes de parar
+- **Coordenação descentralizada**: não existe ponto único de falha porque não tem gerenciador central de workers
+- **Rebalanceamento dinâmico**: quando workers entram ou saem, as partições são redistribuídas automaticamente
+- **Entrega ao menos uma vez**: tarefas são garantidas de serem processadas mesmo quando acontecem falhas
+- **Isolamento de partições**: cada tarefa vai para exatamente uma partição específica
+- **Shutdown gracioso**: workers revogam seus leases antes de parar
+- **Retry com Exponential Backoff** - Tarefas que falham são reagendadas para partições de retry independentes usando **topologia de retry separada** com consistent hashing, garantindo que a carga de retry seja distribuída entre os workers de forma independente das partições primárias
+- **Dead Letter Queue** - Tarefas que excedem o número máximo de tentativas são movidas para uma DLQ no Redis com TTL de 7 dias para análise posterior
+- **Health Check Endpoint** - `GET /health` retorna worker ID, partições owned, lease ID e uptime em JSON
+- **Observabilidade com Prometheus** - Métricas de tarefas processadas, falhadas, em retry, mortas, ownership de partições, eventos de rebalanceamento e profundidade da fila de retry
 
 ### Por Que Essas Escolhas
 

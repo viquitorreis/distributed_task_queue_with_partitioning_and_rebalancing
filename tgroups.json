@@ -1,1 +1,1 @@
-[{"targets":null,"labels":{"job":"dtq-workers"}}]
+[{"targets":["localhost:11939","localhost:11927","localhost:11183","localhost:11540"],"labels":{"job":"dtq-workers"}}]
