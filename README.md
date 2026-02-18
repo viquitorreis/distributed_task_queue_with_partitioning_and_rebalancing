@@ -18,7 +18,7 @@ Workers dynamically discover each other using etcd and use consistent hashing to
 
 > Demo shows: worker rebalancing when a node joins and leaves the cluster, exponential backoff retry flow, by the end prometheus with all workers and the metrics.
 
-### Archicture
+### Architecture
 
 ![alt text](/assets/architecture.png)
 
