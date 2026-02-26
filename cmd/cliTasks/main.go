@@ -7,7 +7,6 @@ import (
 	"math/rand/v2"
 	"os"
 	"strconv"
-	"time"
 
 	"crypto/sha256"
 
@@ -29,7 +28,6 @@ func main() {
 	}
 
 	fmt.Println("creating tasks: ", tasks)
-	time.Sleep(time.Second * 5)
 
 	CreateTask(tasks)
 }
