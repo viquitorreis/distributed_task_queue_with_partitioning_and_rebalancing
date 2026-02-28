@@ -140,7 +140,6 @@ func (w *Worker) CreateWorker() {
 
 func (w *Worker) PopTask() (error, string) {
 	if len(w.chr.FetchPartitionsForNode(w.workerID)) == 0 {
-		time.Sleep(time.Second)
 		return errors.New("error getting node pattitions"), ""
 	}
 

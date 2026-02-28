@@ -1,6 +1,6 @@
-# Distributed Task Queue partitioning and Rebalancing
+# Self-Coordinating Distributed Task Queue with Dynamic Rebalancing
 
-🇺🇸 A self coordinating distributed task processing system using consistent hashing for dynamic partition assignment and etcd for membership coordination of agents / nodes.
+🇺🇸 A self-coordinating distributed task queue where workers discover each other via etcd and automatically rebalance partitions using consistent hashing, with no central coordinator required.
 
 [🇺🇸 English](#-english) | [🇧🇷 Português](#-português)
 
@@ -20,7 +20,7 @@ Workers dynamically discover each other using etcd and use consistent hashing to
 
 ### Architecture
 
-![alt text](/assets/architecture.png)
+![alt text](/assets/distributed_q_architecture.png)
 
 ### Quick Start
 
@@ -253,7 +253,8 @@ Close connections -> Exit
 
 ### Visão geral
 
-Um sistema de processamento de tarefas auto coordenado, usando consistent hashing para atribuição de partições de forma dinâmica e etcd para coordernação de adesão de agents / nodes (workers).
+
+Uma fila de tarefas distribuída e autocoordenável, onde os workers se descobrem uns aos outros usandoetcd e reequilibram automaticamente as partições usando consistent hashing, sem precisar de um coordenador central.
 
 Aqui, vamos ter múltiplas filas no Redis, e vamos ter workers em processos diferentes, se coordenando simultaneamente. Um worker vai pegar uma tarefa da fila, vai processar e depois pegar a próxima.
 
